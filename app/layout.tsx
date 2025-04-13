@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { RSSInitializer } from '@/components/RSSInitializer'
+import { Nav } from '@/components/nav'
 
 export const metadata: Metadata = {
   title: 'v0 App',
@@ -14,7 +16,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body suppressHydrationWarning>{children}</body>
+      <body suppressHydrationWarning>
+        <RSSInitializer />
+        <Nav />
+        {children}
+      </body>
     </html>
   )
 }

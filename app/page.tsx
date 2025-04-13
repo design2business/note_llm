@@ -152,7 +152,12 @@ export default function NotesApp() {
   ])
 
   // 笔记数据
-  const [notes, setNotes] = useState<Note[]>([])
+  const [notes, setNotes] = useState<Note[]>(() => {
+    if (typeof window !== 'undefined') {
+      return JSON.parse(localStorage.getItem('notes') || '[]');
+    }
+    return [];
+  })
 
   const [selectedNote, setSelectedNote] = useState("")
   const [expandedSections, setExpandedSections] = useState({
@@ -200,14 +205,9 @@ export default function NotesApp() {
 
   // 从localStorage加载数据
   useEffect(() => {
-    const savedNotes = localStorage.getItem("notes")
     const savedTags = localStorage.getItem("tags")
     const savedNotebooks = localStorage.getItem("notebooks")
     const savedSelectedNote = localStorage.getItem("selectedNote")
-
-    if (savedNotes) {
-      setNotes(JSON.parse(savedNotes))
-    }
 
     if (savedTags) {
       setAvailableTags(JSON.parse(savedTags))
@@ -895,7 +895,18 @@ export default function NotesApp() {
 
     // 更新可用标签列表
     setAvailableTags(updatedTags)
-  }, [notes]) // 当笔记发生变化时更新标签
+
+    // 添加笔记更新事件监听
+    const handleNotesUpdated = (event: CustomEvent) => {
+      setNotes(event.detail);
+    };
+
+    window.addEventListener('notes-updated', handleNotesUpdated as EventListener);
+
+    return () => {
+      window.removeEventListener('notes-updated', handleNotesUpdated as EventListener);
+    };
+  }, [notes]); // 当笔记发生变化时更新标签
 
   // 处理点击外部关闭菜单
   useEffect(() => {
