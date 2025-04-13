@@ -35,6 +35,7 @@ import {
 import { toast } from "@/components/ui/use-toast"
 import { Toaster } from "@/components/ui/toaster"
 import { MemoryManager } from './memory'
+import { defaultLLM } from './llm'
 
 // 定义笔记类型
 type Note = {
@@ -193,6 +194,8 @@ export default function NotesApp() {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkUrl, setLinkUrl] = useState("")
+  const [isSearchDialogOpen, setIsSearchDialogOpen] = useState(false)
+  const [isSearching, setIsSearching] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   // 从localStorage加载数据
@@ -821,49 +824,8 @@ export default function NotesApp() {
     setIsGenerating(true)
     try {
       console.log("发送请求到AI服务...");
-      const response = await fetch("https://api.siliconflow.cn/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_SILICONFLOW_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: "Qwen/Qwen2.5-7B-Instruct",
-          messages: [
-            {
-              role: "system",
-              content: "你是一个专业的笔记助手。请根据用户提供的笔记内容生成一个简洁的摘要，并推荐3-5个相关的标签。请以JSON格式返回，格式如下：\n{\n  \"summary\": \"摘要内容\",\n  \"tags\": [\"标签1\", \"标签2\", \"标签3\"]\n}\n摘要应该突出笔记的主要观点和关键信息。标签应该是简洁的、相关的关键词。"
-            },
-            {
-              role: "user",
-              content: `请为以下笔记内容生成摘要和标签：\n\n${currentNote.content}`
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 1000
-        })
-      })
-
-      if (!response.ok) {
-        console.error("AI服务响应错误:", response.status);
-        throw new Error("生成失败")
-      }
-
-      const data = await response.json()
-      console.log("收到AI响应:", data);
-      const aiResponse = data.choices[0].message.content
-
-      // 解析JSON响应
-      let aiData;
-      try {
-        aiData = JSON.parse(aiResponse);
-        console.log("解析后的AI数据:", aiData);
-      } catch (error) {
-        console.error("JSON解析错误:", error);
-        throw new Error("AI响应格式错误");
-      }
-
-      const { summary, tags } = aiData;
+      const result = await defaultLLM.generateSummaryAndTags(currentNote.content);
+      const { summary, tags } = result;
 
       // 更新笔记内容，在顶部添加摘要
       if (isEditing && editingNote) {
@@ -907,7 +869,7 @@ export default function NotesApp() {
       console.error("生成过程中发生错误:", error);
       toast({
         title: "生成失败",
-        description: "请稍后重试",
+        description: error instanceof Error ? error.message : "请稍后重试",
         variant: "destructive",
         duration: 3000,
       })
@@ -1029,6 +991,85 @@ export default function NotesApp() {
     }
   }
 
+  // 处理Google和LLM搜索
+  const handleGoogleLLMSearch = () => {
+    console.log("打开搜索对话框")
+    setIsMenuOpen(false)
+    setIsSearchDialogOpen(true)
+  }
+
+  // 确认Google和LLM搜索
+  const confirmGoogleLLMSearch = async () => {
+    console.log("确认搜索:", searchQuery)
+    if (searchQuery.trim()) {
+      try {
+        setIsSearching(true)
+        console.log("开始搜索和分析...")
+        const response = await fetch('/api/search-and-analyze', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query: searchQuery }),
+        })
+
+        const data = await response.json()
+        console.log("API 响应:", data)
+
+        if (!data.success) {
+          throw new Error(data.error || '搜索和分析失败')
+        }
+
+        if (isEditing && editingNote) {
+          const { searchResults, analysis } = data.data
+          const searchContent = `## Google搜索: ${searchQuery}\n\n### 搜索结果\n${searchResults}\n\n### AI分析\n${analysis}`
+          const updatedContent = editingNote.content + `\n\n${searchContent}`
+          
+          setEditingNote({
+            ...editingNote,
+            content: updatedContent
+          })
+          console.log("搜索结果已添加到笔记")
+        } else {
+          // 如果不在编辑模式，创建一个新笔记
+          const { searchResults, analysis } = data.data
+          const newNote: Note = {
+            id: `note-${Date.now()}`,
+            title: `搜索: ${searchQuery}`,
+            content: `## Google搜索: ${searchQuery}\n\n### 搜索结果\n${searchResults}\n\n### AI分析\n${analysis}`,
+            tags: [],
+            notebookId: "default",
+            timestamp: updateTimestamp(),
+            preview: generatePreview(analysis),
+            lastUpdated: Date.now(),
+          }
+          setNotes([newNote, ...notes])
+          setSelectedNote(newNote.id)
+          setEditingNote(newNote)
+          setIsEditing(true)
+        }
+
+        setSearchQuery("")
+        setIsSearchDialogOpen(false)
+        toast({
+          title: "搜索完成",
+          description: "搜索结果已成功添加到笔记中",
+          duration: 3000,
+        })
+      } catch (error) {
+        console.error("搜索和分析时发生错误:", error)
+        toast({
+          title: "搜索失败",
+          description: error instanceof Error ? error.message : "搜索和分析时发生错误",
+          variant: "destructive",
+          duration: 3000,
+        })
+      } finally {
+        setIsSearching(false)
+      }
+    }
+  }
+
   return (
     <div className="flex h-screen bg-white text-gray-900">
       {/* Left Sidebar */}
@@ -1060,6 +1101,13 @@ export default function NotesApp() {
                 >
                   <LinkIcon className="h-4 w-4 mr-2" />
                   <span>添加链接</span>
+                </button>
+                <button
+                  onClick={handleGoogleLLMSearch}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center"
+                >
+                  <Search className="h-4 w-4 mr-2" />
+                  <span>询问Google和LLM</span>
                 </button>
               </div>
             )}
@@ -1601,6 +1649,38 @@ export default function NotesApp() {
             </CustomButton>
             <CustomButton onClick={confirmAddLink} className="px-3 py-1.5 text-sm">
               添加
+            </CustomButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Google和LLM搜索对话框 */}
+      <Dialog open={isSearchDialogOpen} onOpenChange={setIsSearchDialogOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>询问Google和LLM</DialogTitle>
+            <DialogDescription>请输入您想要搜索和分析的关键词</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4">
+            <input
+              type="text"
+              placeholder="输入搜索关键词..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full border rounded-full px-3 py-2 focus:outline-none focus:ring-1 focus:ring-black focus:border-black"
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <CustomButton variant="outline" onClick={() => setIsSearchDialogOpen(false)} className="px-3 py-1.5 text-sm">
+              取消
+            </CustomButton>
+            <CustomButton 
+              onClick={confirmGoogleLLMSearch} 
+              className="px-3 py-1.5 text-sm"
+              disabled={isSearching}
+            >
+              {isSearching ? "搜索中..." : "搜索"}
             </CustomButton>
           </DialogFooter>
         </DialogContent>
