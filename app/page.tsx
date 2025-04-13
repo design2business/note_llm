@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "@/components/ui/use-toast"
 import { Toaster } from "@/components/ui/toaster"
+import { MemoryManager } from './memory'
 
 // 定义笔记类型
 type Note = {
@@ -54,6 +55,14 @@ type Tag = {
 type Notebook = {
   id: string
   name: string
+}
+
+// 定义记忆状态类型
+type MemoryStatus = {
+  step: string;
+  status: 'loading' | 'success' | 'error';
+  message: string;
+  details?: any;
 }
 
 // 生成笔记预览
@@ -169,6 +178,14 @@ export default function NotesApp() {
   // 生成AI摘要和标签
   const [isGenerating, setIsGenerating] = useState(false)
 
+  // 记忆管理器
+  const [memoryManager, setMemoryManager] = useState<MemoryManager | null>(null)
+  const [isMemoryInitialized, setIsMemoryInitialized] = useState(false)
+
+  // 记忆状态
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus[]>([])
+  const [currentMemoryStep, setCurrentMemoryStep] = useState<string>('')
+
   // 从localStorage加载数据
   useEffect(() => {
     const savedNotes = localStorage.getItem("notes")
@@ -230,6 +247,30 @@ export default function NotesApp() {
       }
     }
   }, [editingNote, isEditing])
+
+  // 初始化记忆管理器
+  useEffect(() => {
+    const initMemory = async () => {
+      console.log('开始初始化记忆管理器...');
+      const manager = new MemoryManager()
+      const success = await manager.initialize()
+      if (success) {
+        console.log('记忆管理器初始化成功');
+        setMemoryManager(manager)
+        setIsMemoryInitialized(true)
+      } else {
+        console.error('记忆管理器初始化失败');
+      }
+    }
+    initMemory()
+
+    return () => {
+      console.log('清理记忆管理器...');
+      if (memoryManager) {
+        memoryManager.disconnect()
+      }
+    }
+  }, [])
 
   // 统计每个标签的使用次数
   const getTagCounts = () => {
@@ -663,6 +704,97 @@ export default function NotesApp() {
     setSearchQuery("")
   }
 
+  // 更新记忆状态
+  const updateMemoryStatus = (step: string, status: 'loading' | 'success' | 'error', message: string, details?: any) => {
+    setMemoryStatus(prev => [...prev, { step, status, message, details }]);
+    setCurrentMemoryStep(step);
+  };
+
+  // 清除记忆状态
+  const clearMemoryStatus = () => {
+    setMemoryStatus([]);
+    setCurrentMemoryStep('');
+  };
+
+  // 生成记忆
+  const generateMemory = async () => {
+    console.log('用户点击记忆按钮，开始生成记忆...');
+    clearMemoryStatus();
+    
+    if (!memoryManager || !currentNote.content) {
+      updateMemoryStatus('初始化', 'error', '记忆管理器未初始化或笔记内容为空');
+      toast({
+        title: "错误",
+        description: "记忆管理器未初始化或笔记内容为空",
+        variant: "destructive",
+        duration: 3000,
+      });
+      return;
+    }
+
+    try {
+      updateMemoryStatus('初始化', 'loading', '开始生成记忆...');
+      setIsGenerating(true);
+
+      updateMemoryStatus('工具准备', 'loading', '准备知识提取工具...');
+      const memoryResults = await memoryManager.generateMemory(
+        currentNote.content,
+        // 工具调用开始回调
+        (toolName, args) => {
+          updateMemoryStatus(
+            `工具调用: ${toolName}`,
+            'loading',
+            '正在执行工具...',
+            { 参数: args }
+          );
+        },
+        // 工具调用结果回调
+        (toolName, result) => {
+          updateMemoryStatus(
+            `工具调用: ${toolName}`,
+            result.error ? 'error' : 'success',
+            result.error ? '工具执行失败' : '工具执行成功',
+            { 结果: result }
+          );
+        }
+      );
+      
+      // 更新笔记内容，添加记忆部分
+      if (isEditing && editingNote) {
+        updateMemoryStatus('更新笔记', 'loading', '正在更新笔记内容...');
+        const hasMemory = editingNote.content.includes("## 记忆");
+        const memoryContent = JSON.stringify(memoryResults, null, 2);
+        const updatedContent = hasMemory
+          ? editingNote.content.replace(/## 记忆[\s\S]*?(?=## 笔记内容|$)/, `## 记忆\n${memoryContent}\n\n`)
+          : `## 记忆\n${memoryContent}\n\n## 笔记内容\n${editingNote.content}`;
+
+        setEditingNote({
+          ...editingNote,
+          content: updatedContent
+        });
+        updateMemoryStatus('更新笔记', 'success', '笔记内容已更新');
+      }
+
+      updateMemoryStatus('完成', 'success', '记忆生成完成');
+      toast({
+        title: "生成成功",
+        description: "记忆已生成并添加到笔记中",
+        duration: 3000,
+      });
+    } catch (error) {
+      console.error("生成记忆失败:", error);
+      updateMemoryStatus('错误', 'error', '生成记忆失败', error);
+      toast({
+        title: "生成失败",
+        description: "请稍后重试",
+        variant: "destructive",
+        duration: 3000,
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   // 生成AI摘要和标签
   const generateAIContent = async () => {
     if (!currentNote.content) {
@@ -1022,9 +1154,14 @@ export default function NotesApp() {
               </svg>
               <span>{isGenerating ? "生成中..." : "AI 生成"}</span>
             </CustomButton>
-            <CustomButton variant="outline" className="flex items-center space-x-1 px-3 py-1.5 text-sm">
+            <CustomButton 
+              variant="outline" 
+              className="flex items-center space-x-1 px-3 py-1.5 text-sm"
+              onClick={generateMemory}
+              disabled={isGenerating || !isMemoryInitialized}
+            >
               <Clock className="w-4 h-4" />
-              <span>记忆</span>
+              <span>{isGenerating ? "生成中..." : "记忆"}</span>
             </CustomButton>
           </div>
           <div className="ml-4 font-medium">
@@ -1059,6 +1196,45 @@ export default function NotesApp() {
             )}
           </div>
         </div>
+
+        {/* 记忆状态显示 */}
+        {memoryStatus.length > 0 && (
+          <div className="p-4 border-b bg-gray-50">
+            <div className="space-y-2">
+              {memoryStatus.map((status, index) => (
+                <div key={index} className="flex items-start space-x-2">
+                  <div className={cn(
+                    "w-2 h-2 rounded-full mt-1.5",
+                    status.status === 'loading' && "bg-blue-500 animate-pulse",
+                    status.status === 'success' && "bg-green-500",
+                    status.status === 'error' && "bg-red-500"
+                  )} />
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">{status.step}</span>
+                      <span className={cn(
+                        "text-xs px-2 py-0.5 rounded-full",
+                        status.status === 'loading' && "bg-blue-100 text-blue-800",
+                        status.status === 'success' && "bg-green-100 text-green-800",
+                        status.status === 'error' && "bg-red-100 text-red-800"
+                      )}>
+                        {status.status === 'loading' && '进行中'}
+                        {status.status === 'success' && '成功'}
+                        {status.status === 'error' && '失败'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-0.5">{status.message}</p>
+                    {status.details && (
+                      <div className="mt-1 text-xs text-gray-500 bg-gray-100 p-2 rounded">
+                        <pre className="whitespace-pre-wrap">{JSON.stringify(status.details, null, 2)}</pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 overflow-auto p-6">
           {/* 笔记本选择 (仅在编辑模式下显示) */}
