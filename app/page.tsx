@@ -166,6 +166,9 @@ export default function NotesApp() {
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
   const [lastSaved, setLastSaved] = useState<string | null>(null)
 
+  // 生成AI摘要和标签
+  const [isGenerating, setIsGenerating] = useState(false)
+
   // 从localStorage加载数据
   useEffect(() => {
     const savedNotes = localStorage.getItem("notes")
@@ -296,6 +299,7 @@ export default function NotesApp() {
     tags: [],
     notebookId: "default",
     timestamp: updateTimestamp(),
+    preview: "",
     lastUpdated: Date.now(),
   }
 
@@ -454,8 +458,6 @@ export default function NotesApp() {
       id: `tag-${Date.now()}`,
       name: newTag,
     }
-
-    setAvailableTags([...availableTags, newTagObj])
 
     if (editingNote) {
       addTagToNote(newTag)
@@ -660,6 +662,137 @@ export default function NotesApp() {
     setActiveFilter(null)
     setSearchQuery("")
   }
+
+  // 生成AI摘要和标签
+  const generateAIContent = async () => {
+    if (!currentNote.content) {
+      console.log("错误：笔记内容为空");
+      toast({
+        title: "错误",
+        description: "请先输入笔记内容",
+        variant: "destructive",
+        duration: 3000,
+      })
+      return
+    }
+
+    console.log("开始生成AI内容...");
+    setIsGenerating(true)
+    try {
+      console.log("发送请求到AI服务...");
+      const response = await fetch("https://api.siliconflow.cn/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_SILICONFLOW_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen2.5-7B-Instruct",
+          messages: [
+            {
+              role: "system",
+              content: "你是一个专业的笔记助手。请根据用户提供的笔记内容生成一个简洁的摘要，并推荐3-5个相关的标签。请以JSON格式返回，格式如下：\n{\n  \"summary\": \"摘要内容\",\n  \"tags\": [\"标签1\", \"标签2\", \"标签3\"]\n}\n摘要应该突出笔记的主要观点和关键信息。标签应该是简洁的、相关的关键词。"
+            },
+            {
+              role: "user",
+              content: `请为以下笔记内容生成摘要和标签：\n\n${currentNote.content}`
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 1000
+        })
+      })
+
+      if (!response.ok) {
+        console.error("AI服务响应错误:", response.status);
+        throw new Error("生成失败")
+      }
+
+      const data = await response.json()
+      console.log("收到AI响应:", data);
+      const aiResponse = data.choices[0].message.content
+
+      // 解析JSON响应
+      let aiData;
+      try {
+        aiData = JSON.parse(aiResponse);
+        console.log("解析后的AI数据:", aiData);
+      } catch (error) {
+        console.error("JSON解析错误:", error);
+        throw new Error("AI响应格式错误");
+      }
+
+      const { summary, tags } = aiData;
+
+      // 更新笔记内容，在顶部添加摘要
+      if (isEditing && editingNote) {
+        console.log("更新编辑中的笔记...");
+        // 检查是否已经存在AI摘要部分
+        const hasAISummary = editingNote.content.includes("## AI摘要");
+        const updatedContent = hasAISummary
+          ? editingNote.content.replace(/## AI摘要[\s\S]*?(?=## 笔记内容|$)/, `## AI摘要\n${summary}\n\n`)
+          : `## AI摘要\n${summary}\n\n## 笔记内容\n${editingNote.content}`;
+
+        setEditingNote({
+          ...editingNote,
+          content: updatedContent
+        })
+
+        // 添加新标签
+        console.log("添加新标签...");
+        tags.forEach((tag: string) => {
+          if (!editingNote.tags.includes(tag)) {
+            addTagToNote(tag)
+          }
+        })
+      } else {
+        console.log("创建新笔记...");
+        const updatedContent = `## AI摘要\n${summary}\n\n## 笔记内容\n${currentNote.content}`
+        startEditing()
+        setEditingNote({
+          ...currentNote,
+          content: updatedContent,
+          tags: [...currentNote.tags, ...tags.filter((tag: string) => !currentNote.tags.includes(tag))]
+        })
+      }
+
+      console.log("生成完成");
+      toast({
+        title: "生成成功",
+        description: "AI已生成摘要和标签",
+        duration: 3000,
+      })
+    } catch (error) {
+      console.error("生成过程中发生错误:", error);
+      toast({
+        title: "生成失败",
+        description: "请稍后重试",
+        variant: "destructive",
+        duration: 3000,
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  // 在 NotesApp 组件的开头添加一个新的 useEffect
+  useEffect(() => {
+    // 从所有笔记中收集标签
+    const usedTags = new Set<string>()
+    notes.forEach(note => {
+      note.tags.forEach(tag => usedTags.add(tag))
+    })
+
+    // 创建或更新标签列表
+    const updatedTags = Array.from(usedTags).map(tagName => {
+      // 尝试找到现有的标签对象
+      const existingTag = availableTags.find(t => t.name === tagName)
+      return existingTag || { id: `tag-${Date.now()}-${tagName}`, name: tagName }
+    })
+
+    // 更新可用标签列表
+    setAvailableTags(updatedTags)
+  }, [notes]) // 当笔记发生变化时更新标签
 
   return (
     <div className="flex h-screen bg-white text-gray-900">
@@ -872,7 +1005,12 @@ export default function NotesApp() {
       <div className="flex-1 flex flex-col">
         <div className="flex items-center p-4 border-b">
           <div className="flex space-x-2">
-            <CustomButton variant="outline" className="flex items-center space-x-1 px-3 py-1.5 text-sm">
+            <CustomButton 
+              variant="outline" 
+              className="flex items-center space-x-1 px-3 py-1.5 text-sm"
+              onClick={generateAIContent}
+              disabled={isGenerating}
+            >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path
                   d="M12 4V20M4 12H20"
@@ -882,7 +1020,7 @@ export default function NotesApp() {
                   strokeLinejoin="round"
                 />
               </svg>
-              <span>AI 生成</span>
+              <span>{isGenerating ? "生成中..." : "AI 生成"}</span>
             </CustomButton>
             <CustomButton variant="outline" className="flex items-center space-x-1 px-3 py-1.5 text-sm">
               <Clock className="w-4 h-4" />
