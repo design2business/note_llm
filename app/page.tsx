@@ -18,6 +18,7 @@ import {
   Save,
   AlertCircle,
   Clock,
+  Link as LinkIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -185,6 +186,12 @@ export default function NotesApp() {
   // 记忆状态
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus[]>([])
   const [currentMemoryStep, setCurrentMemoryStep] = useState<string>('')
+
+  // 下拉菜单状态
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
+  const [linkUrl, setLinkUrl] = useState("")
+  const menuRef = useRef<HTMLDivElement>(null)
 
   // 从localStorage加载数据
   useEffect(() => {
@@ -926,16 +933,84 @@ export default function NotesApp() {
     setAvailableTags(updatedTags)
   }, [notes]) // 当笔记发生变化时更新标签
 
+  // 处理点击外部关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsMenuOpen(false)
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside)
+    }
+  }, [])
+
+  // 处理添加链接
+  const handleAddLink = () => {
+    console.log("打开链接输入对话框")
+    setIsMenuOpen(false)
+    setIsLinkDialogOpen(true)
+  }
+
+  // 确认添加链接
+  const confirmAddLink = () => {
+    console.log("确认添加链接:", linkUrl)
+    if (linkUrl.trim()) {
+      if (isEditing && editingNote) {
+        const updatedContent = editingNote.content + `\n\n[链接](${linkUrl})`
+        setEditingNote({
+          ...editingNote,
+          content: updatedContent
+        })
+        console.log("链接已添加到笔记内容")
+      }
+      setLinkUrl("")
+      setIsLinkDialogOpen(false)
+      toast({
+        title: "链接已添加",
+        description: "链接已成功添加到笔记中",
+        duration: 3000,
+      })
+    }
+  }
+
   return (
     <div className="flex h-screen bg-white text-gray-900">
       {/* Left Sidebar */}
       <div className="w-64 border-r flex flex-col">
         <div className="p-4 border-b">
           <h1 className="text-lg font-medium mb-4">笔记本</h1>
-          <CustomButton onClick={createNewNote} className="w-full py-2 px-4 text-sm font-medium">
-            <PlusCircle className="h-4 w-4 mr-2" />
-            <span>新建笔记</span>
-          </CustomButton>
+          <div className="relative" ref={menuRef}>
+            <CustomButton 
+              onClick={() => setIsMenuOpen(!isMenuOpen)} 
+              className="w-full py-2 px-4 text-sm font-medium"
+            >
+              <PlusCircle className="h-4 w-4 mr-2" />
+              <span>新建笔记</span>
+            </CustomButton>
+            
+            {/* 下拉菜单 */}
+            {isMenuOpen && (
+              <div className="absolute top-full left-0 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                <button
+                  onClick={createNewNote}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center"
+                >
+                  <File className="h-4 w-4 mr-2" />
+                  <span>新建笔记</span>
+                </button>
+                <button
+                  onClick={handleAddLink}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 flex items-center"
+                >
+                  <LinkIcon className="h-4 w-4 mr-2" />
+                  <span>添加链接</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="px-3 py-2">
@@ -1428,6 +1503,34 @@ export default function NotesApp() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 链接输入对话框 */}
+      <Dialog open={isLinkDialogOpen} onOpenChange={setIsLinkDialogOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>添加链接</DialogTitle>
+            <DialogDescription>请输入要添加的链接地址</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4">
+            <input
+              type="text"
+              placeholder="https://example.com"
+              value={linkUrl}
+              onChange={(e) => setLinkUrl(e.target.value)}
+              className="w-full border rounded-full px-3 py-2 focus:outline-none focus:ring-1 focus:ring-black focus:border-black"
+              autoFocus
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <CustomButton variant="outline" onClick={() => setIsLinkDialogOpen(false)} className="px-3 py-1.5 text-sm">
+              取消
+            </CustomButton>
+            <CustomButton onClick={confirmAddLink} className="px-3 py-1.5 text-sm">
+              添加
+            </CustomButton>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
