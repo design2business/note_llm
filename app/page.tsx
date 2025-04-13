@@ -3,6 +3,8 @@
 import type React from "react"
 
 import { useState, useEffect, useRef } from "react"
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   PlusCircle,
   ChevronDown,
@@ -955,31 +957,82 @@ export default function NotesApp() {
   }
 
   // 确认添加链接
-  const confirmAddLink = () => {
+  const confirmAddLink = async () => {
     console.log("确认添加链接:", linkUrl)
     if (linkUrl.trim()) {
-      if (isEditing && editingNote) {
-        const updatedContent = editingNote.content + `\n\n[链接](${linkUrl})`
-        setEditingNote({
-          ...editingNote,
-          content: updatedContent
+      try {
+        console.log("开始提取链接内容...")
+        const response = await fetch('/api/extract-content', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ url: linkUrl }),
         })
-        console.log("链接已添加到笔记内容")
+
+        const data = await response.json()
+        console.log("API 响应:", data)
+
+        if (!data.success) {
+          throw new Error(data.error || '提取内容失败')
+        }
+
+        // 在控制台显示提取的内容
+        console.log("提取的标题:", data.data.title)
+        console.log("提取的正文:", data.data.content)
+
+        if (isEditing && editingNote) {
+          const { title, content, siteName } = data.data
+          const linkContent = `## ${title}\n\n${content}\n\n> 来源: ${siteName || linkUrl}`
+          const updatedContent = editingNote.content + `\n\n${linkContent}`
+          
+          setEditingNote({
+            ...editingNote,
+            content: updatedContent
+          })
+          console.log("链接内容已添加到笔记")
+        } else {
+          // 如果不在编辑模式，创建一个新笔记
+          const { title, content, siteName } = data.data
+          const newNote: Note = {
+            id: `note-${Date.now()}`,
+            title: title,
+            content: `## ${title}\n\n${content}\n\n> 来源: ${siteName || linkUrl}`,
+            tags: [],
+            notebookId: "default",
+            timestamp: updateTimestamp(),
+            preview: generatePreview(content),
+            lastUpdated: Date.now(),
+          }
+          setNotes([newNote, ...notes])
+          setSelectedNote(newNote.id)
+          setEditingNote(newNote)
+          setIsEditing(true)
+        }
+
+        setLinkUrl("")
+        setIsLinkDialogOpen(false)
+        toast({
+          title: "链接已添加",
+          description: "链接内容已成功添加到笔记中",
+          duration: 3000,
+        })
+      } catch (error) {
+        console.error("添加链接时发生错误:", error)
+        toast({
+          title: "添加失败",
+          description: error instanceof Error ? error.message : "添加链接时发生错误",
+          variant: "destructive",
+          duration: 3000,
+        })
       }
-      setLinkUrl("")
-      setIsLinkDialogOpen(false)
-      toast({
-        title: "链接已添加",
-        description: "链接已成功添加到笔记中",
-        duration: 3000,
-      })
     }
   }
 
   return (
     <div className="flex h-screen bg-white text-gray-900">
       {/* Left Sidebar */}
-      <div className="w-64 border-r flex flex-col">
+      <div className="w-64 flex-shrink-0 border-r flex flex-col">
         <div className="p-4 border-b">
           <h1 className="text-lg font-medium mb-4">笔记本</h1>
           <div className="relative" ref={menuRef}>
@@ -1139,7 +1192,7 @@ export default function NotesApp() {
       </div>
 
       {/* Middle Section - Notes List */}
-      <div className="w-72 border-r flex flex-col">
+      <div className="w-72 flex-shrink-0 border-r flex flex-col">
         <div className="p-4 border-b flex items-center justify-between">
           <h2 className="text-lg font-medium">
             {activeFilter
@@ -1209,7 +1262,7 @@ export default function NotesApp() {
       </div>
 
       {/* Right Section - Note Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col max-w-3xl">
         <div className="flex items-center p-4 border-b">
           <div className="flex space-x-2">
             <CustomButton 
@@ -1409,17 +1462,36 @@ export default function NotesApp() {
           ) : (
             <div className="prose max-w-none">
               {currentNote.content ? (
-                currentNote.content.split("\n\n").map((paragraph, index) => {
-                  if (paragraph.startsWith("## ")) {
-                    return (
-                      <h2 key={index} className="mt-8">
-                        {paragraph.substring(3)}
-                      </h2>
-                    )
-                  } else {
-                    return <p key={index}>{paragraph}</p>
-                  }
-                })
+                <ReactMarkdown 
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    // 这里可以自定义各种 markdown 元素的渲染
+                    p: ({node, ...props}) => <p className="break-words" {...props} />,
+                    h1: ({node, ...props}) => <h1 className="text-2xl font-bold mt-6 mb-4" {...props} />,
+                    h2: ({node, ...props}) => <h2 className="text-xl font-bold mt-5 mb-3" {...props} />,
+                    h3: ({node, ...props}) => <h3 className="text-lg font-bold mt-4 mb-2" {...props} />,
+                    ul: ({node, ...props}) => <ul className="list-disc list-inside my-4" {...props} />,
+                    ol: ({node, ...props}) => <ol className="list-decimal list-inside my-4" {...props} />,
+                    li: ({node, ...props}) => <li className="my-1" {...props} />,
+                    a: ({node, ...props}) => <a className="text-blue-600 hover:underline" {...props} />,
+                    blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-gray-200 pl-4 my-4 italic" {...props} />,
+                    code: ({inline, className, children, ...props}: any) => {
+                      return inline ? (
+                        <code className="bg-gray-100 rounded px-1" {...props}>
+                          {children}
+                        </code>
+                      ) : (
+                        <pre className="block bg-gray-100 p-4 rounded-lg my-4 overflow-auto">
+                          <code {...props}>
+                            {children}
+                          </code>
+                        </pre>
+                      )
+                    },
+                  }}
+                >
+                  {currentNote.content}
+                </ReactMarkdown>
               ) : (
                 <div className="flex flex-col items-center justify-center h-40 text-center">
                   <p className="text-sm text-gray-500">这个笔记还没有内容</p>
